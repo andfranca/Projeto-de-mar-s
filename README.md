@@ -1,19 +1,16 @@
 # Marés e Cheias Litorâneas
 
 - `frontend/index.html` → Cloudflare **Pages** (HTML + Leaflet, sem build)
-- `backend/index.js` → Cloudflare **Worker** (`/api/forecast`, `/api/tiles/...`)
+- `backend/index.js` → Cloudflare **Worker** (`/api/forecast`)
 
-Fontes (gratuitas): OpenWeather (clima, chuva, camadas do mapa; chave grátis) e Open-Meteo Marine (maré, sem chave).
+Fontes (todas gratuitas e **sem chave de API**): Open-Meteo (clima e chuva), Open-Meteo Marine (maré e ondas), RainViewer (radar de chuva no mapa) e ANA (rios).
 
 ## Rodar local
-1. Chave grátis em https://openweathermap.org/api
-2. `backend/.dev.vars`: `OPENWEATHER_KEY=sua_chave`
-3. `npm install`, depois em dois terminais: `npm run dev:api` e `npm run dev:web`
+`npm install`, depois em dois terminais: `npm run dev:api` e `npm run dev:web` (abre em http://localhost:8788).
 
 ## Deploy
 ```bash
 npx wrangler login
-npx wrangler secret put OPENWEATHER_KEY -c backend/wrangler.toml
 npm run deploy:api      # anote a URL https://mares-api.<conta>.workers.dev
 ```
 Edite `API` em `frontend/index.html` com essa URL, e em `backend/wrangler.toml` troque `ALLOWED_ORIGIN` pelo domínio do Pages (e rode `deploy:api` de novo). Então:

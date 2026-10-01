@@ -5,6 +5,3 @@ compatibility_date = "2025-01-01"
 [vars]
 # Em produção troque pelo domínio do Pages, ex.: "https://mares-web.pages.dev"
 ALLOWED_ORIGIN = "*"
-
-# Segredo (não fica aqui):  npx wrangler secret put OPENWEATHER_KEY -c backend/wrangler.toml
-# Local: crie backend/.dev.vars com  OPENWEATHER_KEY=sua_chave

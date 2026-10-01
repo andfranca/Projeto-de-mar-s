@@ -41,7 +41,7 @@
 <main>
   <section>
     <div id="map"></div>
-    <small>Clique no mapa para escolher outro ponto do litoral. Camadas de clima: OpenWeather.</small>
+    <small>Clique no mapa para escolher outro ponto do litoral. Radar de chuva: RainViewer · clima e maré: Open-Meteo.</small>
   </section>
 
   <section>
@@ -51,7 +51,7 @@
     </div>
     <div class="card"><h2>Agora</h2><div class="grid" id="now"></div></div>
     <div class="card"><h2>Maré (m vs. nível médio) e chuva — 72 h</h2><div id="chart"></div>
-      <small>Linha: altura da maré · Barras: chuva a cada 3 h · Linha vertical: agora</small></div>
+      <small>Linha: altura da maré · Barras: chuva por hora · Linha vertical: agora</small></div>
     <div class="card"><h2>Rios próximos — ANA (telemetria)</h2><div id="rios"></div>
       <small>Nível medido na régua (cm) e variação nas últimas ~6 h. A ANA não publica cotas de alerta nesta API: o status mede o ritmo de subida (≥10 cm subindo · ≥50 rápido · ≥100 muito rápido). Confirme com a Defesa Civil.</small></div>
     <div class="card"><h2>Preamares e baixa-mares</h2><table id="ext"></table></div>
@@ -77,23 +77,40 @@ const $ = (id) => document.getElementById(id);
 const fmt = (t) => new Date(t * 1000).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 
 $('city').innerHTML = Object.keys(CITIES).map((c) => `<option>${c}</option>`).join('');
-$('city').onchange = () => load(...CITIES[$('city').value]);
+$('city').onchange = () => load(...CITIES[$('city').value], $('city').value);
 $('geo').onclick = () => navigator.geolocation?.getCurrentPosition((p) => load(p.coords.latitude, p.coords.longitude));
+
+// Códigos WMO do Open-Meteo -> [ícone, descrição]
+function wmo(c, day) {
+  if (c === 0) return [day ? '☀️' : '🌙', 'céu limpo'];
+  if (c <= 2) return [day ? '⛅' : '☁️', 'parcialmente nublado'];
+  if (c === 3) return ['☁️', 'nublado'];
+  if (c <= 48) return ['🌫️', 'neblina'];
+  if (c <= 57) return ['🌦️', 'garoa'];
+  if (c <= 67) return ['🌧️', 'chuva'];
+  if (c <= 77) return ['❄️', 'neve'];
+  if (c <= 82) return ['🌧️', 'pancadas de chuva'];
+  if (c <= 86) return ['❄️', 'pancadas de neve'];
+  return ['⛈️', 'tempestade'];
+}
 
 // ---- Mapa ----
 const map = L.map('map').setView(CITIES['Santos, SP'], 9);
 const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
-const wx = (l, op = 0.7) => L.tileLayer(`${API}/api/tiles/${l}/{z}/{x}/{y}`, { opacity: op, attribution: '© OpenWeather' });
-const chuva = wx('precipitation_new', 0.8).addTo(map);
-L.control.layers({ 'OpenStreetMap': osm }, {
-  'Chuva': chuva, 'Nuvens': wx('clouds_new', 0.5), 'Vento': wx('wind_new'), 'Pressão': wx('pressure_new'),
-}).addTo(map);
-let marker;
+// Radar de chuva (RainViewer, sem chave): usa o quadro mais recente
+const layers = L.control.layers({ 'OpenStreetMap': osm }, {}).addTo(map);
+fetch('https://api.rainviewer.com/public/weather-maps.json').then((r) => r.json()).then((m) => {
+  const f = m.radar.past.at(-1);
+  const radar = L.tileLayer(`${m.host}${f.path}/256/{z}/{x}/{y}/2/1_1.png`, { opacity: 0.7, maxNativeZoom: 7, attribution: '© RainViewer' }).addTo(map);
+  layers.addOverlay(radar, 'Radar de chuva');
+}).catch(() => {});
+let marker, placeName = '';
 const stations = L.layerGroup().addTo(map);
 map.on('click', (e) => load(e.latlng.lat, e.latlng.lng));
 
 // ---- Dados ----
-async function load(lat, lon) {
+async function load(lat, lon, name = '') {
+  placeName = name;
   $('err').textContent = '';
   $('badge').textContent = '…';
   marker?.remove();
@@ -113,7 +130,7 @@ function render(d) {
   const [name, color] = LEVELS[d.risk.level];
   $('badge').textContent = name;
   $('badge').style.background = color;
-  $('place').textContent = d.location.name || `${d.location.lat}, ${d.location.lon}`;
+  $('place').textContent = placeName || `${d.location.lat}, ${d.location.lon}`;
   $('score').textContent = `Pontuação ${d.risk.score}/18`;
   $('reasons').innerHTML = d.risk.reasons.length
     ? d.risk.reasons.map((x) => `<li>${x}</li>`).join('') : '<li>Nenhum fator de risco relevante</li>';
@@ -121,7 +138,7 @@ function render(d) {
   const n = d.now;
   const cell = (v, l) => `<div><b>${v}</b><span>${l}</span></div>`;
   $('now').innerHTML =
-    `<div><img alt="" width="50" height="50" src="https://openweathermap.org/img/wn/${n.icon}.png"><span>${n.desc}</span></div>` +
+    `<div><b style="font-size:32px">${wmo(n.code, n.day)[0]}</b><span>${wmo(n.code, n.day)[1]}</span></div>` +
     cell(Math.round(n.temp) + '°C', `sensação ${Math.round(n.feels)}°`) + cell(n.humidity + '%', 'umidade') +
     cell(Math.round(n.wind * 3.6) + ' km/h', 'vento') + cell(n.pressure + ' hPa', 'pressão') +
     cell(d.risk.rain24.toFixed(0) + ' mm', 'chuva 24 h') +
@@ -184,7 +201,7 @@ function chart(d) {
        `<path d="${line}" fill="none" stroke="#38bdf8" stroke-width="2"/>`;
 
   for (const r of d.rain) {
-    const a = x(Math.max(r.t - 10800, t0)), b = x(Math.min(r.t, t1));
+    const a = x(Math.max(r.t - 3600, t0)), b = x(Math.min(r.t, t1));
     if (b <= a || r.mm <= 0) continue;
     const h = (r.mm / maxR) * (RB - RT);
     s += `<rect x="${a + 1}" y="${RB - h}" width="${b - a - 2}" height="${h}" fill="#818cf8"><title>${r.mm.toFixed(1)} mm · prob. ${Math.round(r.pop * 100)}%</title></rect>`;

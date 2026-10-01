@@ -1,8 +1,7 @@
-// Backend (Cloudflare Worker): esconde a chave do OpenWeather e junta clima + maré + risco.
-// Fontes: OpenWeather (clima/chuva, chave grátis) e Open-Meteo Marine (maré, sem chave).
+// Backend (Cloudflare Worker): junta clima + maré + rios + risco. Nenhuma chave de API necessária.
+// Fontes: Open-Meteo (clima/chuva), Open-Meteo Marine (maré/ondas) e ANA (nível dos rios).
 
 const UP = { cf: { cacheTtl: 600, cacheEverything: true } };
-const TILE_LAYERS = ['precipitation_new', 'clouds_new', 'wind_new', 'pressure_new'];
 
 const get = async (url, opts) => {
   const r = await fetch(url, opts);
@@ -18,29 +17,14 @@ export default {
       return new Response(null, { headers: { ...cors, 'access-control-allow-methods': 'GET' } });
     }
     try {
-      if (!env.OPENWEATHER_KEY) throw new Error('OPENWEATHER_KEY não configurada');
-
       if (url.pathname === '/api/forecast') {
         const lat = +(+url.searchParams.get('lat')).toFixed(2);
         const lon = +(+url.searchParams.get('lon')).toFixed(2);
         if (!(Math.abs(lat) <= 90 && Math.abs(lon) <= 180)) {
           return Response.json({ error: 'lat/lon inválidos' }, { status: 400, headers: cors });
         }
-        const data = await forecast(lat, lon, env.OPENWEATHER_KEY);
+        const data = await forecast(lat, lon);
         return Response.json(data, { headers: { ...cors, 'cache-control': 'public, max-age=300' } });
-      }
-
-      // Proxy de tiles do OpenWeather (a chave nunca vai para o navegador)
-      const m = url.pathname.match(/^\/api\/tiles\/(\w+)\/(\d+)\/(\d+)\/(\d+)$/);
-      if (m && TILE_LAYERS.includes(m[1])) {
-        const [, layer, z, x, y] = m;
-        const r = await get(
-          `https://tile.openweathermap.org/map/${layer}/${z}/${x}/${y}.png?appid=${env.OPENWEATHER_KEY}`,
-          { cf: { cacheTtl: 1800, cacheEverything: true } }
-        );
-        return new Response(r.body, {
-          headers: { ...cors, 'content-type': 'image/png', 'cache-control': 'public, max-age=1800' },
-        });
       }
       return Response.json({ error: 'not found' }, { status: 404, headers: cors });
     } catch (e) {
@@ -49,12 +33,14 @@ export default {
   },
 };
 
-async function forecast(lat, lon, key) {
-  const ow = (p) =>
-    get(`https://api.openweathermap.org/data/2.5/${p}?lat=${lat}&lon=${lon}&units=metric&lang=pt_br&appid=${key}`, UP).then((r) => r.json());
-  const [cur, fc, sea, rios] = await Promise.all([
-    ow('weather'),
-    ow('forecast'),
+async function forecast(lat, lon) {
+  const [wx, sea, rios] = await Promise.all([
+    get(
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+        '&current=temperature_2m,apparent_temperature,relative_humidity_2m,pressure_msl,wind_speed_10m,wind_gusts_10m,weather_code,is_day' +
+        '&hourly=precipitation,precipitation_probability&wind_speed_unit=ms&timezone=GMT&timeformat=unixtime&forecast_days=3',
+      UP
+    ).then((r) => r.json()),
     get(
       `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&hourly=sea_level_height_msl,wave_height&timezone=GMT&timeformat=unixtime&forecast_days=3`,
       UP
@@ -68,25 +54,36 @@ async function forecast(lat, lon, key) {
     .map((t, i) => ({ t, h: hr.sea_level_height_msl?.[i], wave: hr.wave_height?.[i] }))
     .filter((p) => p.h != null && p.t >= nowS - 3600);
 
-  // OpenWeather: cada bloco de 3h termina em `t`
-  const rain = fc.list.map((f) => ({ t: f.dt, mm: f.rain?.['3h'] || 0, pop: f.pop || 0 }));
+  // Open-Meteo: precipitação de cada hora termina no horário `t`
+  const w = wx.hourly;
+  const rain = w.time
+    .map((t, i) => ({ t, mm: w.precipitation[i] || 0, pop: (w.precipitation_probability?.[i] || 0) / 100 }))
+    .filter((r) => r.t >= nowS);
 
+  // Extremos locais; oscilações < 15 cm entre um extremo e o seguinte são ruído do modelo
   const extremes = [];
+  const push = (e) => {
+    const last = extremes.at(-1);
+    if (!last) extremes.push(e);
+    else if (last.type === e.type) { if ((e.h - last.h) * (e.type === 'preamar' ? 1 : -1) > 0) extremes[extremes.length - 1] = e; }
+    else if (Math.abs(e.h - last.h) >= 0.15) extremes.push(e);
+  };
   for (let i = 1; i < tide.length - 1; i++) {
     const a = tide[i - 1].h, b = tide[i].h, c = tide[i + 1].h;
-    if (b > a && b >= c) extremes.push({ t: tide[i].t, h: b, type: 'preamar' });
-    else if (b < a && b <= c) extremes.push({ t: tide[i].t, h: b, type: 'baixa-mar' });
+    if (b > a && b >= c) push({ t: tide[i].t, h: b, type: 'preamar' });
+    else if (b < a && b <= c) push({ t: tide[i].t, h: b, type: 'baixa-mar' });
   }
 
+  const c = wx.current;
+  const now = {
+    temp: c.temperature_2m, feels: c.apparent_temperature, humidity: c.relative_humidity_2m,
+    pressure: c.pressure_msl, wind: c.wind_speed_10m, gust: c.wind_gusts_10m ?? null,
+    code: c.weather_code, day: !!c.is_day,
+  };
   return {
-    location: { lat, lon, name: cur.name || '' },
-    now: {
-      temp: cur.main.temp, feels: cur.main.feels_like, humidity: cur.main.humidity,
-      pressure: cur.main.pressure, wind: cur.wind.speed, gust: cur.wind.gust ?? null,
-      desc: cur.weather[0].description, icon: cur.weather[0].icon,
-    },
-    rain, tide, extremes, rios,
-    risk: risk(tide, rain, cur, nowS, rios),
+    location: { lat, lon },
+    now, rain, tide, extremes, rios,
+    risk: risk(tide, rain, now, nowS, rios),
   };
 }
 
@@ -168,7 +165,7 @@ function risk(tide, rain, cur, nowS, rios) {
   const tideMax = Math.max(...tide.filter((p) => p.t < nowS + 48 * 3600).map((p) => p.h), -Infinity);
   const waveMax = Math.max(...tide.map((p) => p.wave ?? 0), 0);
   const rain24 = rain.filter((r) => r.t <= nowS + 24 * 3600).reduce((s, r) => s + r.mm, 0);
-  const wind = Math.max(cur.wind.speed, cur.wind.gust ?? 0);
+  const wind = Math.max(cur.wind, cur.gust ?? 0);
 
   if (isFinite(tideMax)) {
     add(tideMax >= 1.5 ? 3 : tideMax >= 1 ? 2 : tideMax >= 0.6 ? 1 : 0, `Maré prevista até ${tideMax.toFixed(2)} m acima do nível médio`);
@@ -176,11 +173,11 @@ function risk(tide, rain, cur, nowS, rios) {
   add(rain24 >= 80 ? 3 : rain24 >= 40 ? 2 : rain24 >= 15 ? 1 : 0, `Chuva acumulada de ${rain24.toFixed(0)} mm nas próximas 24 h`);
   add(waveMax >= 3 ? 2 : waveMax >= 2 ? 1 : 0, `Ondas de até ${waveMax.toFixed(1)} m`);
   add(wind >= 15 ? 1 : 0, `Vento forte (${(wind * 3.6).toFixed(0)} km/h)`);
-  add(cur.main.pressure < 1005 ? 1 : 0, `Pressão baixa (${cur.main.pressure} hPa)`);
+  add(cur.pressure < 1005 ? 1 : 0, `Pressão baixa (${cur.pressure} hPa)`);
 
   // Chuva forte coincidindo com maré alta dificulta o escoamento: agrava o risco
   const coincide = rain.some(
-    (r) => r.mm >= 5 && r.t <= nowS + 48 * 3600 && tide.some((p) => p.t > r.t - 10800 && p.t <= r.t && p.h >= 0.6)
+    (r) => r.mm >= 3 && r.t <= nowS + 48 * 3600 && tide.some((p) => p.t > r.t - 3600 && p.t <= r.t && p.h >= 0.6)
   );
   add(coincide ? 2 : 0, 'Chuva forte coincide com maré alta (drenagem prejudicada)');
 
