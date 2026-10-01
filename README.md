@@ -1,5 +1,9 @@
 # Marés e Cheias Litorâneas
 
+> ⚠️ Atividade feita na aula de **CDIA — ProAdis.us**, criada **apenas para testar o deploy**. Não use para decisões reais de segurança.
+
+Repositório: https://github.com/andfranca/Projeto-de-mar-s
+
 - `frontend/index.html` → Cloudflare **Pages** (HTML + Leaflet, sem build)
 - `backend/index.js` → Cloudflare **Worker** (`/api/forecast`)
 

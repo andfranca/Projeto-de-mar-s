@@ -29,9 +29,12 @@
   svg { width:100%; height:auto; display:block } svg text { fill:var(--mut); font-size:10px }
   small { color:var(--mut) }
   #err { color:var(--l3) }
+  #warn { background:#4a3a0a; color:#fde68a; border-bottom:1px solid #a16207; padding:10px 16px; font-size:14px; text-align:center }
+  footer { text-align:center; padding:16px; color:var(--mut); font-size:13px } footer a, #warn a { color:var(--acc) }
 </style>
 </head>
 <body>
+<div id="warn" role="note">⚠️ <b>Aviso:</b> este app é uma atividade feita na aula de <b>CDIA — ProAdis.us</b> e foi criado <b>apenas para testar o deploy</b>. Não use para decisões reais de segurança; consulte a Defesa Civil e a Marinha.</div>
 <header>
   <h1>🌊 Marés e Cheias Litorâneas</h1>
   <select id="city"></select>
@@ -58,13 +61,14 @@
     <small>Maré: modelo astronômico Open-Meteo (resolução ~8 km, sem efeito de ressaca/meteorológico). Índice de risco é indicativo; siga a Defesa Civil e a Marinha (tábuas oficiais).</small>
   </section>
 </main>
+<footer>Código-fonte: <a href="https://github.com/andfranca/Projeto-de-mar-s" target="_blank" rel="noopener">github.com/andfranca/Projeto-de-mar-s</a></footer>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 // URL do Worker em produção: ajuste após o deploy do backend.
 const API = ['localhost', '127.0.0.1'].includes(location.hostname)
   ? 'http://localhost:8787'
-  : 'https://mares-api.SEU-SUBDOMINIO.workers.dev';
+  : 'https://mares-api.anderson-frca.workers.dev';
 
 const CITIES = {
   'Santos, SP': [-23.98, -46.30], 'Rio de Janeiro, RJ': [-22.97, -43.17], 'Vitória, ES': [-20.31, -40.29],
