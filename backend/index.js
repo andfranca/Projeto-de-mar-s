@@ -82,8 +82,8 @@ async function forecast(lat, lon) {
   };
   return {
     location: { lat, lon },
-    now, rain, tide, extremes, rios,
-    risk: risk(tide, rain, now, nowS, rios),
+    now, rain, tide, extremes, rios: rios?.list ?? null, riosInfo: rios && { found: rios.found, sample: rios.sample },
+    risk: risk(tide, rain, now, nowS, rios?.list),
   };
 }
 
@@ -127,7 +127,7 @@ async function rivers(lat, lon, maxKm = 60, max = 5) {
   const now = Date.now();
   const ini = ymd(now - 3 * 86400e3), fim = ymd(now);
   const out = await Promise.all(
-    cand.slice(0, 10).map(async (s) => {
+    cand.slice(0, 20).map(async (s) => {
       try {
         const xml = await get(`${ANA}DadosHidrometeorologicos?codEstacao=${s.cod}&dataInicio=${ini}&dataFim=${fim}`, UP).then((r) => r.text());
         const pts = xml.split('<DadosHidrometereologicos ').slice(1).map((r) => ({
@@ -153,7 +153,8 @@ async function rivers(lat, lon, maxKm = 60, max = 5) {
       } catch { return null; }
     })
   );
-  return out.filter(Boolean).slice(0, max);
+  const list = out.filter(Boolean).slice(0, max);
+  return { list, found: cand.length, sample: cand.slice(0, 3).map((c) => c.rio || c.nome) };
 }
 
 // Índice simples e transparente: maré alta + chuva + ondas + vento + pressão baixa.

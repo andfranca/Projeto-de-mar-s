@@ -149,7 +149,7 @@ function render(d) {
   $('ext').innerHTML = d.extremes.map((e) =>
     `<tr><td>${fmt(e.t)}</td><td>${e.type === 'preamar' ? '▲ Preamar' : '▼ Baixa-mar'}</td><td align="right">${e.h.toFixed(2)} m</td></tr>`).join('');
   $('chart').innerHTML = chart(d);
-  renderRios(d.rios);
+  renderRios(d.rios, d.riosInfo);
 }
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -162,10 +162,13 @@ function spark(serie) {
   return `<svg viewBox="0 0 120 32" width="120" height="32"><polyline points="${pts}" fill="none" stroke="#38bdf8" stroke-width="1.5"/></svg>`;
 }
 
-function renderRios(rios) {
+function renderRios(rios, info) {
   stations.clearLayers();
   if (!rios) { $('rios').innerHTML = '<small>Serviço da ANA indisponível no momento.</small>'; return; }
-  if (!rios.length) { $('rios').innerHTML = '<small>Nenhuma estação telemétrica ativa em até 60 km.</small>'; return; }
+  if (!rios.length) { $('rios').innerHTML = info?.found
+    ? `<small>A ANA cadastra ${info.found} estação(ões) a até 60 km (ex.: ${info.sample.map(esc).join(', ')}), mas <b>nenhuma publica dados de nível na telemetria pública</b> — comum em regiões onde as medições são de órgãos estaduais (ex.: DAEE/SP). Consulte o órgão estadual ou a Defesa Civil.</small>`
+    : '<small>Nenhuma estação da ANA a até 60 km deste ponto.</small>';
+    return; }
   $('rios').innerHTML = '<table>' + rios.map((r) => {
     const [txt, col] = r.nivel == null ? ['Dado antigo', '#8fa8bd'] : RLV[r.nivel];
     const arrow = r.var6h > 0 ? '▲' : r.var6h < 0 ? '▼' : '■';
