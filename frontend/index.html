@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marés e Cheias Litorâneas</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --bg:#0b1722; --card:#13273a; --tx:#e7f0f8; --mut:#8fa8bd; --line:#24425c; --acc:#38bdf8;
+          --l0:#22c55e; --l1:#eab308; --l2:#f97316; --l3:#ef4444; }
+  * { box-sizing:border-box }
+  body { margin:0; font:15px/1.45 system-ui,sans-serif; background:var(--bg); color:var(--tx) }
+  header { display:flex; gap:12px; flex-wrap:wrap; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line) }
+  h1 { font-size:18px; margin:0; flex:1 }
+  select,button { background:var(--card); color:var(--tx); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit }
+  button { cursor:pointer }
+  main { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,1fr); gap:16px; padding:16px; max-width:1300px; margin:auto }
+  @media (max-width:850px) { main { grid-template-columns:1fr } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:16px }
+  .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--mut); margin:0 0 10px }
+  #map { height:440px; border-radius:12px; border:1px solid var(--line); margin-bottom:16px }
+  #risk { display:flex; align-items:center; gap:14px }
+  #badge { font-weight:700; font-size:20px; padding:8px 14px; border-radius:10px; color:#000 }
+  ul { margin:8px 0 0; padding-left:18px; color:var(--mut) }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:10px }
+  .grid b { display:block; font-size:20px }
+  .grid span { color:var(--mut); font-size:12px }
+  table { width:100%; border-collapse:collapse } td { padding:4px 0; border-bottom:1px solid var(--line) }
+  svg { width:100%; height:auto; display:block } svg text { fill:var(--mut); font-size:10px }
+  small { color:var(--mut) }
+  #err { color:var(--l3) }
+</style>
+</head>
+<body>
+<header>
+  <h1>🌊 Marés e Cheias Litorâneas</h1>
+  <select id="city"></select>
+  <button id="geo">📍 Minha localização</button>
+</header>
+
+<main>
+  <section>
+    <div id="map"></div>
+    <small>Clique no mapa para escolher outro ponto do litoral. Camadas de clima: OpenWeather.</small>
+  </section>
+
+  <section>
+    <div class="card"><h2>Risco de cheia — próximas 48 h</h2>
+      <div id="risk"><div id="badge">…</div><div><b id="place"></b><div id="score"></div></div></div>
+      <ul id="reasons"></ul><div id="err"></div>
+    </div>
+    <div class="card"><h2>Agora</h2><div class="grid" id="now"></div></div>
+    <div class="card"><h2>Maré (m vs. nível médio) e chuva — 72 h</h2><div id="chart"></div>
+      <small>Linha: altura da maré · Barras: chuva a cada 3 h · Linha vertical: agora</small></div>
+    <div class="card"><h2>Preamares e baixa-mares</h2><table id="ext"></table></div>
+    <small>Maré: modelo astronômico Open-Meteo (resolução ~8 km, sem efeito de ressaca/meteorológico). Índice de risco é indicativo; siga a Defesa Civil e a Marinha (tábuas oficiais).</small>
+  </section>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// URL do Worker em produção: ajuste após o deploy do backend.
+const API = ['localhost', '127.0.0.1'].includes(location.hostname)
+  ? 'http://localhost:8787'
+  : 'https://mares-api.SEU-SUBDOMINIO.workers.dev';
+
+const CITIES = {
+  'Santos, SP': [-23.98, -46.30], 'Rio de Janeiro, RJ': [-22.97, -43.17], 'Vitória, ES': [-20.31, -40.29],
+  'Salvador, BA': [-12.97, -38.50], 'Recife, PE': [-8.05, -34.87], 'Fortaleza, CE': [-3.72, -38.50],
+  'São Luís, MA': [-2.50, -44.30], 'Belém, PA': [-1.45, -48.50], 'Florianópolis, SC': [-27.60, -48.55],
+  'Itajaí, SC': [-26.90, -48.65], 'Rio Grande, RS': [-32.15, -52.10], 'Maceió, AL': [-9.67, -35.72],
+};
+const LEVELS = [['Baixo', 'var(--l0)'], ['Moderado', 'var(--l1)'], ['Alto', 'var(--l2)'], ['Muito alto', 'var(--l3)']];
+const $ = (id) => document.getElementById(id);
+const fmt = (t) => new Date(t * 1000).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+$('city').innerHTML = Object.keys(CITIES).map((c) => `<option>${c}</option>`).join('');
+$('city').onchange = () => load(...CITIES[$('city').value]);
+$('geo').onclick = () => navigator.geolocation?.getCurrentPosition((p) => load(p.coords.latitude, p.coords.longitude));
+
+// ---- Mapa ----
+const map = L.map('map').setView(CITIES['Santos, SP'], 9);
+const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+const wx = (l, op = 0.7) => L.tileLayer(`${API}/api/tiles/${l}/{z}/{x}/{y}`, { opacity: op, attribution: '© OpenWeather' });
+const chuva = wx('precipitation_new', 0.8).addTo(map);
+L.control.layers({ 'OpenStreetMap': osm }, {
+  'Chuva': chuva, 'Nuvens': wx('clouds_new', 0.5), 'Vento': wx('wind_new'), 'Pressão': wx('pressure_new'),
+}).addTo(map);
+let marker;
+map.on('click', (e) => load(e.latlng.lat, e.latlng.lng));
+
+// ---- Dados ----
+async function load(lat, lon) {
+  $('err').textContent = '';
+  $('badge').textContent = '…';
+  marker?.remove();
+  marker = L.marker([lat, lon]).addTo(map);
+  map.panTo([lat, lon]);
+  try {
+    const r = await fetch(`${API}/api/forecast?lat=${lat}&lon=${lon}`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+    render(d);
+  } catch (e) {
+    $('err').textContent = 'Erro ao carregar: ' + e.message;
+  }
+}
+
+function render(d) {
+  const [name, color] = LEVELS[d.risk.level];
+  $('badge').textContent = name;
+  $('badge').style.background = color;
+  $('place').textContent = d.location.name || `${d.location.lat}, ${d.location.lon}`;
+  $('score').textContent = `Pontuação ${d.risk.score}/15`;
+  $('reasons').innerHTML = d.risk.reasons.length
+    ? d.risk.reasons.map((x) => `<li>${x}</li>`).join('') : '<li>Nenhum fator de risco relevante</li>';
+
+  const n = d.now;
+  const cell = (v, l) => `<div><b>${v}</b><span>${l}</span></div>`;
+  $('now').innerHTML =
+    `<div><img alt="" width="50" height="50" src="https://openweathermap.org/img/wn/${n.icon}.png"><span>${n.desc}</span></div>` +
+    cell(Math.round(n.temp) + '°C', `sensação ${Math.round(n.feels)}°`) + cell(n.humidity + '%', 'umidade') +
+    cell(Math.round(n.wind * 3.6) + ' km/h', 'vento') + cell(n.pressure + ' hPa', 'pressão') +
+    cell(d.risk.rain24.toFixed(0) + ' mm', 'chuva 24 h') +
+    cell(Math.max(...d.tide.map((p) => p.wave ?? 0)).toFixed(1) + ' m', 'onda máx.');
+
+  $('ext').innerHTML = d.extremes.map((e) =>
+    `<tr><td>${fmt(e.t)}</td><td>${e.type === 'preamar' ? '▲ Preamar' : '▼ Baixa-mar'}</td><td align="right">${e.h.toFixed(2)} m</td></tr>`).join('');
+  $('chart').innerHTML = chart(d);
+}
+
+// Gráfico SVG sem dependências: maré (linha) + chuva (barras)
+function chart(d) {
+  const W = 760, H = 300, L = 38, R = 8, TOP = 10, TB = 170, RT = 195, RB = 270;
+  const t0 = d.tide[0].t, t1 = d.tide.at(-1).t;
+  const x = (t) => L + ((t - t0) / (t1 - t0)) * (W - L - R);
+  const hs = d.tide.map((p) => p.h);
+  const lo = Math.min(-0.2, ...hs), hi = Math.max(0.5, ...hs);
+  const y = (h) => TB - ((h - lo) / (hi - lo)) * (TB - TOP);
+  const maxR = Math.max(10, ...d.rain.map((r) => r.mm));
+  const line = d.tide.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.h).toFixed(1)}`).join('');
+  let s = `<svg viewBox="0 0 ${W} ${H}">`;
+
+  // grade temporal a cada 12 h (horário local)
+  const g = new Date(t0 * 1000); g.setMinutes(0, 0, 0);
+  while (g.getHours() % 12) g.setHours(g.getHours() + 1);
+  for (let t = g / 1000; t < t1; t += 43200) {
+    const dt = new Date(t * 1000), px = x(t);
+    s += `<line x1="${px}" x2="${px}" y1="${TOP}" y2="${RB}" stroke="#24425c" stroke-width=".6"/>` +
+         `<text x="${px}" y="${H - 8}" text-anchor="middle">${String(dt.getDate()).padStart(2, '0')}/${String(dt.getMonth() + 1).padStart(2, '0')} ${dt.getHours()}h</text>`;
+  }
+  s += `<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="#8fa8bd" stroke-dasharray="4"/>` +
+       `<text x="2" y="${y(0) + 3}">0 m</text><text x="2" y="${y(hi) + 8}">${hi.toFixed(1)}</text><text x="2" y="${y(lo)}">${lo.toFixed(1)}</text>` +
+       `<path d="${line}L${x(t1)},${TB}L${x(t0)},${TB}Z" fill="#38bdf8" opacity=".15"/>` +
+       `<path d="${line}" fill="none" stroke="#38bdf8" stroke-width="2"/>`;
+
+  for (const r of d.rain) {
+    const a = x(Math.max(r.t - 10800, t0)), b = x(Math.min(r.t, t1));
+    if (b <= a || r.mm <= 0) continue;
+    const h = (r.mm / maxR) * (RB - RT);
+    s += `<rect x="${a + 1}" y="${RB - h}" width="${b - a - 2}" height="${h}" fill="#818cf8"><title>${r.mm.toFixed(1)} mm · prob. ${Math.round(r.pop * 100)}%</title></rect>`;
+  }
+  s += `<line x1="${L}" x2="${W - R}" y1="${RB}" y2="${RB}" stroke="#24425c"/><text x="2" y="${RB}">0 mm</text><text x="2" y="${RT + 8}">${maxR.toFixed(0)} mm</text>`;
+  const now = Date.now() / 1000;
+  if (now > t0 && now < t1) s += `<line x1="${x(now)}" x2="${x(now)}" y1="${TOP}" y2="${RB}" stroke="#f97316" stroke-width="1.5"/>`;
+  return s + '</svg>';
+}
+
+load(...CITIES['Santos, SP']);
+</script>
+</body>
+</html>
