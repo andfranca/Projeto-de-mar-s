@@ -4,23 +4,17 @@
 
 Repositório: https://github.com/andfranca/Projeto-de-mar-s
 
-- `frontend/index.html` → Cloudflare **Pages** (HTML + Leaflet, sem build)
-- `backend/index.js` → Cloudflare **Worker** (`/api/forecast`)
+- `frontend/index.html` → site estático (HTML + Leaflet, sem build)
+- `backend/index.js` → API (`/api/forecast`)
+- `wrangler.toml` → um único **Cloudflare Worker** (`projeto-de-mares`) serve o site e a API no mesmo domínio
 
 Fontes (todas gratuitas e **sem chave de API**): Open-Meteo (clima e chuva), Open-Meteo Marine (maré e ondas), RainViewer (radar de chuva no mapa) e ANA (rios).
 
 ## Rodar local
-`npm install`, depois em dois terminais: `npm run dev:api` e `npm run dev:web` (abre em http://localhost:8788).
+`npm install` e `npm run dev` → http://localhost:8787
 
 ## Deploy
-```bash
-npx wrangler login
-npm run deploy:api      # anote a URL https://mares-api.<conta>.workers.dev
-```
-Edite `API` em `frontend/index.html` com essa URL, e em `backend/wrangler.toml` troque `ALLOWED_ORIGIN` pelo domínio do Pages (e rode `deploy:api` de novo). Então:
-```bash
-npm run deploy:web      # cria o projeto Pages "mares-web"
-```
+`npx wrangler login` e `npm run deploy` (ou push no GitHub, se o repositório estiver ligado ao Worker em Workers Builds com comando de deploy `npx wrangler deploy`).
 
 ## Rios (ANA)
 O Worker consulta o serviço público de telemetria da ANA (`telemetriaws1.ana.gov.br`, sem autenticação): lista estações ativas até 60 km do ponto (RHN + CotaOnline, lista em cache por 24 h) e lê o nível dos últimos 3 dias. A API não traz cotas de alerta, então o status usa o ritmo de subida em ~6 h (≥10 / ≥50 / ≥100 cm) e entra no índice de risco. Se a ANA estiver fora do ar, o painel de rios mostra aviso e o resto continua funcionando.

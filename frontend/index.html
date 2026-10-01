@@ -65,10 +65,8 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-// URL do Worker em produção: ajuste após o deploy do backend.
-const API = ['localhost', '127.0.0.1'].includes(location.hostname)
-  ? 'http://localhost:8787'
-  : 'https://mares-api.anderson-frca.workers.dev';
+// Backend no mesmo domínio (Worker serve o site e /api/*)
+const API = '';
 
 const CITIES = {
   'Santos, SP': [-23.98, -46.30], 'Rio de Janeiro, RJ': [-22.97, -43.17], 'Vitória, ES': [-20.31, -40.29],

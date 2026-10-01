@@ -2,10 +2,8 @@
   "name": "mares",
   "private": true,
   "scripts": {
-    "dev:api": "wrangler dev -c backend/wrangler.toml",
-    "dev:web": "wrangler pages dev frontend",
-    "deploy:api": "wrangler deploy -c backend/wrangler.toml",
-    "deploy:web": "wrangler pages deploy frontend --project-name=mares-web"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"

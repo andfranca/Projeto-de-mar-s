@@ -12,7 +12,7 @@ const get = async (url, opts) => {
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
-    const cors = { 'access-control-allow-origin': env.ALLOWED_ORIGIN || '*' };
+    const cors = { 'access-control-allow-origin': '*' };
     if (req.method === 'OPTIONS') {
       return new Response(null, { headers: { ...cors, 'access-control-allow-methods': 'GET' } });
     }

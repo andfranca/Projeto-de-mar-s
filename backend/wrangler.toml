@@ -1,7 +1,0 @@
-name = "mares-api"
-main = "index.js"
-compatibility_date = "2025-01-01"
-
-[vars]
-# Em produção troque pelo domínio do Pages, ex.: "https://mares-web.pages.dev"
-ALLOWED_ORIGIN = "*"

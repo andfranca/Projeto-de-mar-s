@@ -1,0 +1,8 @@
+name = "projeto-de-mares"
+main = "backend/index.js"
+compatibility_date = "2025-01-01"
+
+# Frontend estático servido pelo próprio Worker; só /api/* executa o código do backend
+[assets]
+directory = "./frontend"
+run_worker_first = ["/api/*"]
