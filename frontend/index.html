@@ -52,6 +52,8 @@
     <div class="card"><h2>Agora</h2><div class="grid" id="now"></div></div>
     <div class="card"><h2>Maré (m vs. nível médio) e chuva — 72 h</h2><div id="chart"></div>
       <small>Linha: altura da maré · Barras: chuva a cada 3 h · Linha vertical: agora</small></div>
+    <div class="card"><h2>Rios próximos — ANA (telemetria)</h2><div id="rios"></div>
+      <small>Nível medido na régua (cm) e variação nas últimas ~6 h. A ANA não publica cotas de alerta nesta API: o status mede o ritmo de subida (≥10 cm subindo · ≥50 rápido · ≥100 muito rápido). Confirme com a Defesa Civil.</small></div>
     <div class="card"><h2>Preamares e baixa-mares</h2><table id="ext"></table></div>
     <small>Maré: modelo astronômico Open-Meteo (resolução ~8 km, sem efeito de ressaca/meteorológico). Índice de risco é indicativo; siga a Defesa Civil e a Marinha (tábuas oficiais).</small>
   </section>
@@ -87,6 +89,7 @@ L.control.layers({ 'OpenStreetMap': osm }, {
   'Chuva': chuva, 'Nuvens': wx('clouds_new', 0.5), 'Vento': wx('wind_new'), 'Pressão': wx('pressure_new'),
 }).addTo(map);
 let marker;
+const stations = L.layerGroup().addTo(map);
 map.on('click', (e) => load(e.latlng.lat, e.latlng.lng));
 
 // ---- Dados ----
@@ -111,7 +114,7 @@ function render(d) {
   $('badge').textContent = name;
   $('badge').style.background = color;
   $('place').textContent = d.location.name || `${d.location.lat}, ${d.location.lon}`;
-  $('score').textContent = `Pontuação ${d.risk.score}/15`;
+  $('score').textContent = `Pontuação ${d.risk.score}/18`;
   $('reasons').innerHTML = d.risk.reasons.length
     ? d.risk.reasons.map((x) => `<li>${x}</li>`).join('') : '<li>Nenhum fator de risco relevante</li>';
 
@@ -127,6 +130,32 @@ function render(d) {
   $('ext').innerHTML = d.extremes.map((e) =>
     `<tr><td>${fmt(e.t)}</td><td>${e.type === 'preamar' ? '▲ Preamar' : '▼ Baixa-mar'}</td><td align="right">${e.h.toFixed(2)} m</td></tr>`).join('');
   $('chart').innerHTML = chart(d);
+  renderRios(d.rios);
+}
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const RLV = [['Estável', '#22c55e'], ['Subindo', '#eab308'], ['Subida rápida', '#f97316'], ['Subida muito rápida', '#ef4444']];
+
+function spark(serie) {
+  const ts = serie.map((p) => p[0]), ns = serie.map((p) => p[1]);
+  const t0 = ts[0], t1 = ts.at(-1), lo = Math.min(...ns), hi = Math.max(...ns, lo + 1);
+  const pts = serie.map(([t, n]) => `${(((t - t0) / (t1 - t0)) * 118 + 1).toFixed(1)},${(30 - ((n - lo) / (hi - lo)) * 28).toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 120 32" width="120" height="32"><polyline points="${pts}" fill="none" stroke="#38bdf8" stroke-width="1.5"/></svg>`;
+}
+
+function renderRios(rios) {
+  stations.clearLayers();
+  if (!rios) { $('rios').innerHTML = '<small>Serviço da ANA indisponível no momento.</small>'; return; }
+  if (!rios.length) { $('rios').innerHTML = '<small>Nenhuma estação telemétrica ativa em até 60 km.</small>'; return; }
+  $('rios').innerHTML = '<table>' + rios.map((r) => {
+    const [txt, col] = r.nivel == null ? ['Dado antigo', '#8fa8bd'] : RLV[r.nivel];
+    const arrow = r.var6h > 0 ? '▲' : r.var6h < 0 ? '▼' : '■';
+    L.circleMarker([r.lat, r.lon], { radius: 8, color: '#000', weight: 1, fillColor: col, fillOpacity: 0.95 })
+      .bindPopup(`<b>${esc(r.rio || r.nome)}</b><br>${esc(r.nome)} · ${(r.ultimo.cm / 100).toFixed(2)} m`).addTo(stations);
+    return `<tr><td><b>${esc(r.rio || '—')}</b><br><small>${esc(r.nome)} · ${r.dist} km · ${fmt(r.ultimo.t)}</small></td>
+      <td>${spark(r.serie)}</td>
+      <td align="right"><b>${(r.ultimo.cm / 100).toFixed(2)} m</b><br><small>${arrow} ${r.var6h > 0 ? '+' : ''}${r.var6h} cm/6 h</small><br><b style="color:${col}">${txt}</b></td></tr>`;
+  }).join('') + '</table>';
 }
 
 // Gráfico SVG sem dependências: maré (linha) + chuva (barras)

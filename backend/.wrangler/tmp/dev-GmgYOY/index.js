@@ -46,13 +46,15 @@ var index_default = {
 };
 async function forecast(lat, lon, key) {
   const ow = /* @__PURE__ */ __name((p) => get(`https://api.openweathermap.org/data/2.5/${p}?lat=${lat}&lon=${lon}&units=metric&lang=pt_br&appid=${key}`, UP).then((r) => r.json()), "ow");
-  const [cur, fc, sea] = await Promise.all([
+  const [cur, fc, sea, rios] = await Promise.all([
     ow("weather"),
     ow("forecast"),
     get(
       `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&hourly=sea_level_height_msl,wave_height&timezone=GMT&timeformat=unixtime&forecast_days=3`,
       UP
-    ).then((r) => r.json())
+    ).then((r) => r.json()),
+    rivers(lat, lon).catch(() => null)
+    // ANA é instável: falha aqui não derruba o resto
   ]);
   const nowS = Math.floor(Date.now() / 1e3);
   const hr = sea.hourly || {};
@@ -79,11 +81,90 @@ async function forecast(lat, lon, key) {
     rain,
     tide,
     extremes,
-    risk: risk(tide, rain, cur, nowS)
+    rios,
+    risk: risk(tide, rain, cur, nowS, rios)
   };
 }
 __name(forecast, "forecast");
-function risk(tide, rain, cur, nowS) {
+var ANA = "http://telemetriaws1.ana.gov.br/ServiceANA.asmx/";
+var ANA_ORIGENS = [5, 4];
+var field = /* @__PURE__ */ __name((s, k) => {
+  const a = s.indexOf(`<${k}>`);
+  if (a < 0) return "";
+  const st = a + k.length + 2;
+  return s.slice(st, s.indexOf("<", st)).trim();
+}, "field");
+var km = /* @__PURE__ */ __name((la1, lo1, la2, lo2) => {
+  const r = Math.PI / 180, dLa = (la2 - la1) * r, dLo = (lo2 - lo1) * r;
+  const a = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(dLo / 2) ** 2;
+  return 12742 * Math.asin(Math.sqrt(a));
+}, "km");
+var ymd = /* @__PURE__ */ __name((ms) => new Date(ms - 3 * 36e5).toISOString().slice(0, 10), "ymd");
+async function rivers(lat, lon, maxKm = 60, max = 5) {
+  const lists = await Promise.all(
+    ANA_ORIGENS.map(
+      (o) => get(`${ANA}ListaEstacoesTelemetricas?statusEstacoes=0&origem=${o}`, { cf: { cacheTtl: 86400, cacheEverything: true } }).then((r) => r.text())
+    )
+  );
+  const cand = [];
+  for (const xml of lists) {
+    for (const row of xml.split("<Table ").slice(1)) {
+      const la = +field(row, "Latitude"), lo = +field(row, "Longitude");
+      if (Math.abs(la - lat) > 0.6 || Math.abs(lo - lon) > 0.6) continue;
+      const dist = km(lat, lon, la, lo);
+      if (dist > maxKm || field(row, "StatusEstacao") !== "Ativo") continue;
+      cand.push({
+        cod: field(row, "CodEstacao"),
+        nome: field(row, "NomeEstacao").replace(/&amp;/g, "&"),
+        rio: field(row, "NomeRio").replace(/&amp;/g, "&"),
+        lat: la,
+        lon: lo,
+        dist: +dist.toFixed(1)
+      });
+    }
+  }
+  cand.sort((a, b) => a.dist - b.dist);
+  const now = Date.now();
+  const ini = ymd(now - 3 * 864e5), fim = ymd(now);
+  const out = await Promise.all(
+    cand.slice(0, 10).map(async (s) => {
+      try {
+        const xml = await get(`${ANA}DadosHidrometeorologicos?codEstacao=${s.cod}&dataInicio=${ini}&dataFim=${fim}`, UP).then((r) => r.text());
+        const pts = xml.split("<DadosHidrometereologicos ").slice(1).map((r) => ({
+          t: Date.parse(field(r, "DataHora").replace(" ", "T") + "-03:00") / 1e3,
+          n: parseFloat(field(r, "Nivel")),
+          q: parseFloat(field(r, "Vazao")),
+          c: parseFloat(field(r, "Chuva"))
+        }));
+        const lv = pts.filter((p) => isFinite(p.n) && isFinite(p.t)).sort((a, b) => a.t - b.t);
+        if (lv.length < 3) return null;
+        const last = lv.at(-1), nowS = now / 1e3;
+        const ref = lv.reduce((b, p) => Math.abs(p.t - (last.t - 6 * 3600)) < Math.abs(b.t - (last.t - 6 * 3600)) ? p : b);
+        const var6h = last.n - ref.n;
+        const stale = nowS - last.t > 6 * 3600;
+        const rise = stale ? 0 : var6h;
+        const nivel = stale ? null : rise >= 100 ? 3 : rise >= 50 ? 2 : rise >= 10 ? 1 : 0;
+        const hourly = lv.filter((p, i) => i === lv.length - 1 || Math.floor(p.t / 3600) !== Math.floor(lv[i + 1].t / 3600));
+        return {
+          ...s,
+          nivel,
+          stale,
+          ultimo: { t: last.t, cm: last.n, vazao: isFinite(last.q) ? last.q : null },
+          var6h: +var6h.toFixed(0),
+          max72: Math.max(...lv.map((p) => p.n)),
+          min72: Math.min(...lv.map((p) => p.n)),
+          chuva24: +pts.filter((p) => p.t > nowS - 86400 && p.c > 0).reduce((a, p) => a + p.c, 0).toFixed(1),
+          serie: hourly.map((p) => [p.t, p.n])
+        };
+      } catch {
+        return null;
+      }
+    })
+  );
+  return out.filter(Boolean).slice(0, max);
+}
+__name(rivers, "rivers");
+function risk(tide, rain, cur, nowS, rios) {
   const reasons = [];
   let score = 0;
   const add = /* @__PURE__ */ __name((pts, txt) => {
@@ -107,6 +188,8 @@ function risk(tide, rain, cur, nowS) {
     (r) => r.mm >= 5 && r.t <= nowS + 48 * 3600 && tide.some((p) => p.t > r.t - 10800 && p.t <= r.t && p.h >= 0.6)
   );
   add(coincide ? 2 : 0, "Chuva forte coincide com mar\xE9 alta (drenagem prejudicada)");
+  const worst = (rios || []).filter((r) => r.nivel > 0).sort((a, b) => b.nivel - a.nivel)[0];
+  if (worst) add(worst.nivel, `Rio ${worst.rio || worst.nome} subindo ${worst.var6h} cm em ~6 h (esta\xE7\xE3o ${worst.nome}, ANA)`);
   const level = score >= 7 ? 3 : score >= 5 ? 2 : score >= 3 ? 1 : 0;
   return { level, score, reasons, rain24, tideMax: isFinite(tideMax) ? tideMax : null };
 }
